@@ -1,9 +1,12 @@
 use crate::model::{self, TaskResponse, TaskRequest, TaskError};
-use axum::http::StatusCode;
-use uuid::Uuid;
-use axum::Json;
+use axum::{
+    extract::State, // State je v extract
+    Json, 
+    http::StatusCode, 
+};
+use sqlx::{sqlite::SqlitePool};
 
-pub fn create_task(task: TaskRequest) -> Result<TaskResponse, model::TaskError> {
+pub async fn create_task(task: TaskRequest, pool: &SqlitePool) -> Result<TaskResponse, model::TaskError> {
     if task.title.is_empty() {
         return Err(TaskError::InvalidTitle);
     } else if task.title.len() > 16 || task.title.len() < 3 {
@@ -12,12 +15,22 @@ pub fn create_task(task: TaskRequest) -> Result<TaskResponse, model::TaskError> 
         return Err(TaskError::InvalidPriority);
     }
 
-    Ok(TaskResponse { id: Uuid::new_v4().to_string(), title: task.title, priority: task.priority })
+    let id = uuid::Uuid::new_v4().to_string();
+
+    sqlx::query("INSERT INTO tasks (id, title, priority) VALUES (?, ?, ?)")
+        .bind(&id)
+        .bind(&task.title)
+        .bind(&task.priority)
+        .execute(pool)
+        .await
+        .map_err(|_| TaskError::DatabaseError)?;
+
+    Ok(TaskResponse { id: id, title: task.title, priority: task.priority })
 }
 
 
-pub async fn create_task_handler(Json(task): Json<TaskRequest>) -> (StatusCode, String) {
-    match create_task(task) {
+pub async fn create_task_handler( State(pool): State<SqlitePool>, Json(task): Json<TaskRequest>) -> (StatusCode, String) {
+    match create_task(task, &pool).await {
         Ok(task) => {
             (StatusCode::CREATED, serde_json::to_string(&task).unwrap())
         },
@@ -26,6 +39,9 @@ pub async fn create_task_handler(Json(task): Json<TaskRequest>) -> (StatusCode, 
         },
         Err(TaskError::InvalidPriority) => {
             (StatusCode::BAD_REQUEST, "InvalidPriority".to_string())
+        },
+        Err(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "DatabaseError".to_string())
         }
     }
 }

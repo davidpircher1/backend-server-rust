@@ -16,4 +16,5 @@ pub struct TaskResponse {
 pub enum TaskError {
     InvalidTitle,
     InvalidPriority,
+    DatabaseError,
 }
