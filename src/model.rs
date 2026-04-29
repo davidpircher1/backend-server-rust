@@ -6,7 +6,7 @@ pub struct TaskRequest {
     pub priority: i32,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, sqlx::FromRow)]
 pub struct TaskResponse {
     pub id: String,
     pub title: String,
