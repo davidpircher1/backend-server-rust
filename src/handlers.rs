@@ -2,9 +2,9 @@ use crate::model::{self, TaskResponse, TaskRequest, TaskError};
 use axum::{
     Json, extract::{Path, State}, http::StatusCode 
 };
-use sqlx::{sqlite::SqlitePool};
+use sqlx::sqlite::{self, SqlitePool};
 
-pub async fn create_task(task: TaskRequest, pool: &SqlitePool) -> Result<TaskResponse, model::TaskError> {
+pub async fn create_task(task: TaskRequest, pool: &SqlitePool) -> Result<TaskResponse, TaskError> {
     if task.title.is_empty() {
         return Err(TaskError::InvalidTitle);
     } else if task.title.len() > 16 || task.title.len() < 3 {
@@ -67,7 +67,7 @@ pub async fn read_tasks_handler( State(pool): State<SqlitePool>) -> (StatusCode,
 }
 
 
-pub async fn read_task(pool: &SqlitePool, id: &String) -> Result<Option<TaskResponse>, model::TaskError> {
+pub async fn read_task(pool: &SqlitePool, id: &String) -> Result<Option<TaskResponse>, TaskError> {
     let task = sqlx::query_as::<_, TaskResponse>(
             "SELECT id, title, priority FROM tasks WHERE id = ?"
         )
@@ -91,6 +91,58 @@ pub async fn read_task_handler( State(pool): State<SqlitePool>, Path(id): Path<S
         },
         Err(_) => {
             (StatusCode::INTERNAL_SERVER_ERROR, "Database invalid".to_string())
+        }
+    }
+}
+
+pub async fn update_task(pool: &SqlitePool, id: &String, task: TaskRequest) -> Result<bool, TaskError> {
+    let result = sqlx::query("UPDATE tasks SET title=?, priority=? WHERE id=?")
+    .bind(&task.title)
+    .bind(&task.priority)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|_| TaskError::DatabaseError)?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn update_task_handler(State(pool): State<SqlitePool>, Path(id): Path<String>, Json(task): Json<TaskRequest>) -> (StatusCode, String) {
+    match update_task(&pool, &id, task).await {
+        Ok(t) => {
+            if t {
+                (StatusCode::OK, "Update success".to_string())
+            } else {
+                (StatusCode::BAD_REQUEST, "Update unsuccessful".to_string())
+            }
+        }
+        Err(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "DatabaseError".to_string())
+        }
+    }
+}
+
+pub async fn delete_task(pool: &SqlitePool, id: &String) -> Result<bool, TaskError> {
+    let result = sqlx::query("DELETE FROM tasks WHERE id=?")
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|_| TaskError::DatabaseError)?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn delete_task_handler(State(pool): State<SqlitePool>, Path(id): Path<String>) -> (StatusCode, String) {
+    match delete_task(&pool, &id).await {
+        Ok(t) => {
+            if t {
+                (StatusCode::OK, "Delete success".to_string())
+            } else {
+                (StatusCode::BAD_REQUEST, "Delete unsuccessful".to_string())
+            }
+        }
+        Err(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "DatabaseError".to_string())
         }
     }
 }
