@@ -8,6 +8,8 @@ use axum::{
 
 mod handlers;
 mod model;
+mod tasks;
+mod users;
 
 use sqlx::sqlite::SqlitePool;
 
@@ -18,10 +20,19 @@ async fn main() {
 
     // 2. query
     let query = "
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            name TEXT NOT NULL,
+            mail TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY, 
             title TEXT NOT NULL,
             priority INTEGER
+            --user_id INTEGER NOT NULL,
+            --FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
     ";
 
@@ -37,7 +48,8 @@ async fn main() {
         .route("/tasks", get(handlers::read_tasks_handler))
         .route("/tasks/:id", get(handlers::read_task_handler))
         .route("/tasks/:id", put(handlers::update_task_handler))
-        .route("/tasks/:id", delete(handlers::delete_task_handler)).with_state(pool);
+        .route("/tasks/:id", delete(handlers::delete_task_handler))
+        .route("/register", post(handlers::register_user_handler)).with_state(pool);
 
 
     // run our app with hyper, listening globally on port 3000

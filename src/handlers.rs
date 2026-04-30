@@ -1,148 +1,128 @@
-use crate::model::{self, TaskResponse, TaskRequest, TaskError};
+use crate::model::*;
 use axum::{
-    Json, extract::{Path, State}, http::StatusCode 
+    Json, extract::{Path, State}, http::StatusCode, response::IntoResponse
 };
-use sqlx::sqlite::{self, SqlitePool};
-
-pub async fn create_task(task: TaskRequest, pool: &SqlitePool) -> Result<TaskResponse, TaskError> {
-    if task.title.is_empty() {
-        return Err(TaskError::InvalidTitle);
-    } else if task.title.len() > 16 || task.title.len() < 3 {
-        return Err(TaskError::InvalidTitle);
-    } else if task.priority == 0 {
-        return Err(TaskError::InvalidPriority);
-    }
-
-    let id = uuid::Uuid::new_v4().to_string();
-
-    sqlx::query("INSERT INTO tasks (id, title, priority) VALUES (?, ?, ?)")
-        .bind(&id)
-        .bind(&task.title)
-        .bind(&task.priority)
-        .execute(pool)
-        .await
-        .map_err(|_| TaskError::DatabaseError)?;
-
-    Ok(TaskResponse { id: id, title: task.title, priority: task.priority })
-}
+use sqlx::{sqlite::SqlitePool};
+use crate::tasks::*;
+use crate::users::*;
 
 
-pub async fn create_task_handler( State(pool): State<SqlitePool>, Json(task): Json<TaskRequest>) -> (StatusCode, String) {
+pub async fn create_task_handler( State(pool): State<SqlitePool>, Json(task): Json<TaskRequest>) -> impl IntoResponse {
     match create_task(task, &pool).await {
         Ok(task) => {
-            (StatusCode::CREATED, serde_json::to_string(&task).unwrap())
+            (StatusCode::CREATED, serde_json::to_string(&task).unwrap()).into_response()
         },
-        Err(TaskError::InvalidTitle) => {
-            (StatusCode::BAD_REQUEST, "InvalidTitle".to_string())
-        },
-        Err(TaskError::InvalidPriority) => {
-            (StatusCode::BAD_REQUEST, "InvalidPriority".to_string())
-        },
-        Err(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "DatabaseError".to_string())
+        Err(e) => {
+            match e {
+                TaskError::AppErrors(msg) => {
+                    (StatusCode::BAD_REQUEST, msg).into_response()
+                }, 
+                TaskError::DatabaseError => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "DB error").into_response()
+                },
+                _ => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Error").into_response()
+                }
+            }
         }
     }
 }
 
 
-pub async fn read_tasks(pool: &SqlitePool) -> Result<Vec<TaskResponse>, model::TaskError> {
-    let tasks = sqlx::query_as::<_, TaskResponse>("SELECT id, title, priority FROM tasks")
-        .fetch_all(pool) // Chceme VŠETKY riadky
-        .await
-        .map_err(|_| TaskError::DatabaseError)?;
-
-    Ok(tasks)
-}
-
-
-pub async fn read_tasks_handler( State(pool): State<SqlitePool>) -> (StatusCode, Json<Vec<TaskResponse>>) {
+pub async fn read_tasks_handler( State(pool): State<SqlitePool>) -> impl IntoResponse {
     match read_tasks(&pool).await {
         Ok(tasks) => {
-            (StatusCode::OK, Json(tasks))
+            (StatusCode::OK, Json(tasks)).into_response()
         },
+        Err(TaskError::DatabaseError) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "DB error").into_response()
+        }
         Err(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(Vec::new()))
+            (StatusCode::INTERNAL_SERVER_ERROR, "Invalid ID").into_response()
         }
     }
 }
 
 
-pub async fn read_task(pool: &SqlitePool, id: &String) -> Result<Option<TaskResponse>, TaskError> {
-    let task = sqlx::query_as::<_, TaskResponse>(
-            "SELECT id, title, priority FROM tasks WHERE id = ?"
-        )
-        .bind(id)
-        .fetch_optional(pool) // Vráti Ok(Some(task)) alebo Ok(None)
-        .await
-        .map_err(|_| TaskError::DatabaseError)?;
-
-    Ok(task)
-}
-
-
-pub async fn read_task_handler( State(pool): State<SqlitePool>, Path(id): Path<String>) -> (StatusCode, String) {
+pub async fn read_task_handler( State(pool): State<SqlitePool>, Path(id): Path<String>) -> impl IntoResponse {
     match read_task(&pool, &id).await {
         Ok(task) => {
             if task.is_some() {
-                (StatusCode::OK, serde_json::to_string(&task).unwrap())
+                (StatusCode::OK, serde_json::to_string(&task).unwrap()).into_response()
             } else {
-                (StatusCode::NOT_FOUND, "There is no record with this id.".to_string())
+                (StatusCode::NOT_FOUND, "There is no record with this id.").into_response()
             }
         },
+        Err(TaskError::DatabaseError) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database invalid").into_response()
+        },
         Err(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database invalid".to_string())
+            (StatusCode::INTERNAL_SERVER_ERROR, "Unkown error").into_response()
         }
     }
 }
 
-pub async fn update_task(pool: &SqlitePool, id: &String, task: TaskRequest) -> Result<bool, TaskError> {
-    let result = sqlx::query("UPDATE tasks SET title=?, priority=? WHERE id=?")
-    .bind(&task.title)
-    .bind(&task.priority)
-    .bind(id)
-    .execute(pool)
-    .await
-    .map_err(|_| TaskError::DatabaseError)?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-pub async fn update_task_handler(State(pool): State<SqlitePool>, Path(id): Path<String>, Json(task): Json<TaskRequest>) -> (StatusCode, String) {
+pub async fn update_task_handler(State(pool): State<SqlitePool>, Path(id): Path<String>, Json(task): Json<TaskRequest>) -> impl IntoResponse {
     match update_task(&pool, &id, task).await {
         Ok(t) => {
             if t {
-                (StatusCode::OK, "Update success".to_string())
+                (StatusCode::OK, "Update success").into_response()
             } else {
-                (StatusCode::BAD_REQUEST, "Update unsuccessful".to_string())
+                (StatusCode::BAD_REQUEST, "Update unsuccessful").into_response()
             }
         }
-        Err(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "DatabaseError".to_string())
+        Err(e) => {
+            match e {
+                TaskError::AppErrors(msg) => {
+                    (StatusCode::BAD_REQUEST, msg).into_response()
+                }, 
+                TaskError::DatabaseError => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "DB error").into_response()
+                },
+                _ => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Error").into_response()
+                }
+            }
         }
     }
 }
 
-pub async fn delete_task(pool: &SqlitePool, id: &String) -> Result<bool, TaskError> {
-    let result = sqlx::query("DELETE FROM tasks WHERE id=?")
-    .bind(id)
-    .execute(pool)
-    .await
-    .map_err(|_| TaskError::DatabaseError)?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-pub async fn delete_task_handler(State(pool): State<SqlitePool>, Path(id): Path<String>) -> (StatusCode, String) {
+pub async fn delete_task_handler(State(pool): State<SqlitePool>, Path(id): Path<String>) -> impl IntoResponse {
     match delete_task(&pool, &id).await {
         Ok(t) => {
             if t {
-                (StatusCode::OK, "Delete success".to_string())
+                (StatusCode::OK, "Delete success").into_response()
             } else {
-                (StatusCode::BAD_REQUEST, "Delete unsuccessful".to_string())
+                (StatusCode::BAD_REQUEST, "Delete unsuccessful").into_response()
             }
         }
+        Err(TaskError::DatabaseError) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database invalid").into_response()
+        },
         Err(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "DatabaseError".to_string())
+            (StatusCode::INTERNAL_SERVER_ERROR, "Unkown error").into_response()
         }
     }
+}
+
+pub async fn register_user_handler(State(pool): State<SqlitePool>, Json(user): Json<User>) -> impl IntoResponse {
+    match register_user(user, &pool).await {
+        Ok(_) => {
+            (StatusCode::CREATED, "Registered successfuly").into_response()
+        },
+        Err(e) => {
+            match e {
+                TaskError::AppErrors(msg) => {
+                    (StatusCode::BAD_REQUEST, msg).into_response()
+                },
+                TaskError::DatabaseError => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Chyba databázy").into_response()
+                },
+                _ => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Neznama chyba").into_response()
+                }
+            }
+        }
+    }
+
 }
